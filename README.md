@@ -64,11 +64,7 @@ Este instalador resuelve por defecto **todos** los errores típicos que aparecen
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/mtandazo35/librenms-installer-debian/main/install.sh)"
 ```
 
-LibreNMS quedará escuchando en **puerto 80** (HTTP plano). Si tu VPS está detrás de NAT/MikroTik con port-forward externo (ej. `:8087` → `:80`), pasa `BASE_URL` con el puerto público:
-
-```bash
-sudo BASE_URL=http://200.1.2.3:8087 bash -c "$(curl -fsSL https://raw.githubusercontent.com/mtandazo35/librenms-installer-debian/main/install.sh)"
-```
+LibreNMS quedará escuchando en **puerto 80**. Auto-detecta la IP del host.
 
 ### Alternativa: clonar y ejecutar
 
@@ -79,14 +75,8 @@ Si prefieres revisar el script antes de correrlo (recomendado):
 git clone https://github.com/mtandazo35/librenms-installer-debian.git
 cd librenms-installer-debian
 
-# 2. Correr el instalador (modo interactivo: te pregunta el BASE_URL)
+# 2. Correr el instalador
 sudo bash install.sh
-
-# 3. O modo no-interactivo con todas las variables
-sudo BASE_URL=http://1.2.3.4:8087 \
-     ADMIN_EMAIL=tu@correo.com \
-     TIMEZONE=America/Guayaquil \
-     bash install.sh
 ```
 
 Al finalizar verás:
@@ -96,7 +86,7 @@ Al finalizar verás:
   ✓ LibreNMS instalado correctamente
 =================================================================
 
-  URL:        http://1.2.3.4:8087
+  URL:        http://<ip-de-tu-host>
   Usuario:    admin
   Password:   <generado-aleatorio-20-chars>
 
@@ -112,7 +102,7 @@ Todas son opcionales. Si no se proveen, el script las genera o las pregunta.
 
 | Variable | Default | Descripción |
 |---|---|---|
-| `BASE_URL` | (interactivo) | URL pública por la que se accede al web UI. Ej: `http://200.1.2.3:8087` |
+| `BASE_URL` | (auto-detect) | URL pública por la que se accede al web UI. Ej: `http://<ip-del-host>` |
 | `ADMIN_EMAIL` | `admin@<dominio>` | Email del usuario admin inicial |
 | `ADMIN_PASS` | (random 20 chars) | Password del usuario admin. Si no se provee se genera |
 | `TIMEZONE` | `America/Guayaquil` | Zona horaria del sistema y de PHP |
@@ -127,19 +117,6 @@ Todas son opcionales. Si no se proveen, el script las genera o las pregunta.
 1. Abre `http://<tu-base-url>` en el navegador.
 2. Login: `admin` + el password que muestra el banner final (o lee `/root/librenms-credenciales.txt`).
 3. Cambia el password en `User → Preferences` apenas entres.
-
-### Acceso detrás de NAT (MikroTik / OPNsense)
-
-El instalador usa `server_name _` (catch-all) en nginx, así que funciona con cualquier Host header. Solo necesitas que tu firewall haga port-forward del puerto público que elijas → `<ip-privada-del-vps>:80`.
-
-Ejemplo MikroTik (forward de puerto público 8087 → VPS 10.0.0.50:80):
-
-```
-/ip firewall nat add chain=dstnat protocol=tcp dst-port=8087 \
-    action=dst-nat to-addresses=10.0.0.50 to-ports=80
-```
-
-Y al correr el instalador: `BASE_URL=http://<tu-ip-pública>:8087`
 
 ---
 

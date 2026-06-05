@@ -23,7 +23,7 @@
 #
 #  Uso:
 #    sudo bash install.sh
-#    sudo BASE_URL=http://1.2.3.4:8087 ADMIN_EMAIL=tu@correo bash install.sh
+#    sudo BASE_URL=http://mi.dominio ADMIN_EMAIL=tu@correo bash install.sh
 #
 #  Variables (export antes de correr, todas opcionales):
 #    BASE_URL          URL pública por la que se accederá (si vacía, se pregunta)
@@ -44,6 +44,11 @@ set -euo pipefail
 #  Configuración
 # ============================================================================
 INSTALLER_VERSION="1.0"
+
+# Globals seteados por detect_host_ip (declarados aquí para set -u safety)
+PRIMARY_IP=""
+PUBLIC_IP=""
+
 TIMEZONE="${TIMEZONE:-America/Guayaquil}"
 LIBRENMS_DIR="/opt/librenms"
 LIBRENMS_USER="librenms"
@@ -129,34 +134,57 @@ preflight() {
 # ============================================================================
 #  Etapa 1 — Input usuario
 # ============================================================================
-prompt_user_input() {
-  local primary_ip
-  primary_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+detect_host_ip() {
+  # IP primaria del host (interfaz de salida default)
+  PRIMARY_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++)if($i=="src"){print $(i+1);exit}}')
+  [[ -n "$PRIMARY_IP" ]] || PRIMARY_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 
+  # IP pública (si difiere de la primaria → estamos detrás de NAT)
+  PUBLIC_IP=""
+  for svc in "https://api.ipify.org" "https://ifconfig.me" "https://icanhazip.com" "https://checkip.amazonaws.com"; do
+    PUBLIC_IP=$(curl -fsS --connect-timeout 2 --max-time 2 "$svc" 2>/dev/null | tr -d '[:space:]')
+    [[ -n "$PUBLIC_IP" ]] && break
+  done
+  [[ -n "$PUBLIC_IP" ]] || PUBLIC_IP="$PRIMARY_IP"
+}
+
+prompt_user_input() {
+  detect_host_ip
+
+  # BASE_URL: prioridad 1) env var, 2) IP detectada (sin prompts), siempre puerto 80
+  # nginx siempre escucha en :80 del host. BASE_URL = http://<IP local>
+  # Si el host está detrás de NAT, el operador configura el port-forward externo
+  # en su router; LibreNMS no necesita saber el puerto público.
   if [[ -z "${BASE_URL:-}" ]]; then
-    if [[ -t 0 ]]; then
-      echo
-      echo -e "${C_Y}>>> Configuración interactiva${C_N}"
-      echo "Ingresa la URL por la que se accederá a LibreNMS desde el navegador."
-      echo "Ejemplos:"
-      echo "  http://200.1.2.3:8087    (IP pública + puerto NAT de router/MikroTik)"
-      echo "  http://librenms.dominio  (FQDN)"
-      echo "  http://${primary_ip}        (IP interna del VPS, acceso directo)"
-      echo
-      read -rp "BASE_URL [http://${primary_ip}]: " BASE_URL
-      BASE_URL="${BASE_URL:-http://${primary_ip}}"
-    else
-      BASE_URL="http://${primary_ip}"
-      warn "Sin TTY interactivo → BASE_URL=${BASE_URL}"
-    fi
+    BASE_URL="http://${PRIMARY_IP}"
   fi
 
-  ADMIN_EMAIL="${ADMIN_EMAIL:-admin@$(hostname -d 2>/dev/null || echo localdomain)}"
+  ADMIN_EMAIL="${ADMIN_EMAIL:-admin@$(hostname -d 2>/dev/null || hostname || echo localdomain)}"
   ADMIN_PASS="${ADMIN_PASS:-$(random_pass | cut -c1-20)}"
 
-  ok "BASE_URL    = $BASE_URL"
-  ok "ADMIN_EMAIL = $ADMIN_EMAIL"
-  ok "TIMEZONE    = $TIMEZONE"
+  # Pre-install summary — muestra qué va a hacer antes de tocar nada
+  echo
+  echo -e "${C_M}╔═══════════════════════════════════════════════════════════════╗${C_N}"
+  echo -e "${C_M}║          LibreNMS Installer — Resumen pre-instalación         ║${C_N}"
+  echo -e "${C_M}╚═══════════════════════════════════════════════════════════════╝${C_N}"
+  echo
+  printf "  %-22s %s\n" "IP local detectada:"  "$PRIMARY_IP"
+  printf "  %-22s %s\n" "IP pública detectada:" "${PUBLIC_IP:-<no detectada>}"
+  if [[ "$PUBLIC_IP" != "$PRIMARY_IP" && -n "$PUBLIC_IP" ]]; then
+    printf "  %-22s ${C_Y}%s${C_N}\n" "Detrás de NAT:" "sí (público $PUBLIC_IP ≠ local $PRIMARY_IP)"
+  fi
+  printf "  %-22s ${C_B}%s${C_N}\n" "URL de acceso (HTTP/80):" "$BASE_URL"
+  printf "  %-22s %s\n" "Email admin:" "$ADMIN_EMAIL"
+  printf "  %-22s %s\n" "Zona horaria:" "$TIMEZONE"
+  printf "  %-22s %s\n" "Community SNMP:" "$SNMP_COMMUNITY"
+  echo
+
+  # Si está corriendo en TTY interactivo: 5 segundos para abortar.
+  # Si está en pipe/non-TTY: arranca de una.
+  if [[ -t 0 ]]; then
+    echo -e "  ${C_Y}Iniciando en 5 segundos... (Ctrl+C para cancelar)${C_N}"
+    sleep 5
+  fi
 }
 
 # ============================================================================
@@ -674,9 +702,8 @@ bootstrap_runtime() {
 # ============================================================================
 save_credentials() {
   log "=== 20. Guardando credenciales ==="
-  local hostname_full primary_ip
+  local hostname_full
   hostname_full=$(hostname -f 2>/dev/null || hostname)
-  primary_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
 
   cat > "$CRED_FILE" <<EOF
 =================================================================
@@ -684,11 +711,15 @@ save_credentials() {
 =================================================================
   Generado:           $(date '+%Y-%m-%d %H:%M:%S %Z')
   Instalador:         install.sh v${INSTALLER_VERSION}
-  Host:               ${hostname_full} (IP interna: ${primary_ip})
+  Host:               ${hostname_full}
   Sistema:            $(. /etc/os-release; echo "$PRETTY_NAME")
   LibreNMS:           $(cd "$LIBRENMS_DIR" && sudo -u "$LIBRENMS_USER" git log -1 --format='%h %s' 2>/dev/null || echo "n/a")
 
-  --- Acceso web ---
+  --- IPs detectadas ---
+  IP local del host:  ${PRIMARY_IP}
+  IP pública:         ${PUBLIC_IP:-<no detectada>}
+
+  --- Acceso web (nginx escucha en puerto 80) ---
   URL:                ${BASE_URL}
   Usuario admin:      admin
   Password admin:     $([[ "${ADMIN_CREATED:-0}" -eq 1 ]] && echo "${ADMIN_PASS}" || echo "(no modificado — admin ya existía)")
@@ -768,28 +799,61 @@ final_validate() {
 #  Banner final
 # ============================================================================
 print_banner() {
-  echo
-  echo -e "${C_G}=================================================================${C_N}"
-  echo -e "${C_G}  ✓ LibreNMS instalado correctamente${C_N}"
-  echo -e "${C_G}=================================================================${C_N}"
-  echo
-  echo -e "  ${C_M}URL:${C_N}        ${C_B}${BASE_URL}${C_N}"
-  echo -e "  ${C_M}Usuario:${C_N}    ${C_B}admin${C_N}"
+  # Endurece permisos del log antes de mostrar credenciales
+  chmod 600 "$LOG_FILE" 2>/dev/null || true
+
+  local pass_display
   if [[ "${ADMIN_CREATED:-0}" -eq 1 ]]; then
-    echo -e "  ${C_M}Password:${C_N}   ${C_B}${ADMIN_PASS}${C_N}"
+    pass_display="$ADMIN_PASS"
   else
-    echo -e "  ${C_M}Password:${C_N}   ${C_Y}(no modificado — admin ya existía)${C_N}"
+    pass_display="(no modificado — admin ya existía)"
+  fi
+
+  # Trunca para no romper la caja UTF-8 si el contenido excede el ancho del campo
+  local url_display="${BASE_URL:0:46}"
+  local user_display="admin"
+  local pass_truncated="${pass_display:0:46}"
+
+  echo
+  echo -e "${C_G}╔═══════════════════════════════════════════════════════════════╗${C_N}"
+  echo -e "${C_G}║                                                               ║${C_N}"
+  echo -e "${C_G}║          ✓  LibreNMS instalado correctamente  ✓               ║${C_N}"
+  echo -e "${C_G}║                                                               ║${C_N}"
+  echo -e "${C_G}╚═══════════════════════════════════════════════════════════════╝${C_N}"
+  echo
+  echo -e "${C_Y}┌───────────────────────────────────────────────────────────────┐${C_N}"
+  echo -e "${C_Y}│  ACCESO AL PANEL WEB                                          │${C_N}"
+  echo -e "${C_Y}├───────────────────────────────────────────────────────────────┤${C_N}"
+  printf "${C_Y}│${C_N}  ${C_M}%-12s${C_N} ${C_B}%-46s${C_N} ${C_Y}│${C_N}\n" "URL:"      "$url_display"
+  printf "${C_Y}│${C_N}  ${C_M}%-12s${C_N} ${C_B}%-46s${C_N} ${C_Y}│${C_N}\n" "Usuario:"  "$user_display"
+  printf "${C_Y}│${C_N}  ${C_M}%-12s${C_N} ${C_B}%-46s${C_N} ${C_Y}│${C_N}\n" "Password:" "$pass_truncated"
+  echo -e "${C_Y}└───────────────────────────────────────────────────────────────┘${C_N}"
+  echo
+  if [[ "${ADMIN_CREATED:-0}" -eq 1 ]]; then
+    echo -e "  ${C_R}⚠  GUARDA ESTAS CREDENCIALES AHORA${C_N}"
+    echo -e "     El password aleatorio NO se vuelve a mostrar."
+    echo -e "     Copia también desde: ${C_Y}${CRED_FILE}${C_N}"
+    echo
+  fi
+  echo -e "  ${C_M}Detección automática de IPs:${C_N}"
+  printf "    %-22s %s\n" "IP local del host:" "$PRIMARY_IP"
+  printf "    %-22s %s\n" "IP pública detectada:" "${PUBLIC_IP:-<no detectada>}"
+  if [[ -n "$PUBLIC_IP" && "$PUBLIC_IP" != "$PRIMARY_IP" ]]; then
+    echo -e "    ${C_Y}Estás detrás de NAT.${C_N} nginx escucha en :80 del host."
+    echo -e "    Si tu router hace forward de un puerto externo → :80 interno,"
+    echo -e "    re-ejecuta el instalador con: ${C_B}BASE_URL=http://${PUBLIC_IP}:<puerto>${C_N}"
   fi
   echo
-  echo -e "  Credenciales completas: ${C_Y}${CRED_FILE}${C_N}"
-  echo -e "  Log de instalación:     ${C_Y}${LOG_FILE}${C_N}"
+  echo -e "  ${C_M}Archivos importantes:${C_N}"
+  printf "    %-22s %s\n" "Credenciales:"    "$CRED_FILE  (modo 600)"
+  printf "    %-22s %s\n" "Log instalación:" "$LOG_FILE"
+  printf "    %-22s %s\n" "Código LibreNMS:" "$LIBRENMS_DIR"
   echo
-  echo -e "  ${C_Y}>>> Próximo paso:${C_N} agregar tu primer device"
-  echo -e "      ${C_B}sudo -u librenms lnms device:add <ip-o-hostname> --v2c --community=public${C_N}"
+  echo -e "  ${C_Y}>>> Próximo paso — agregar tu primer device:${C_N}"
+  echo -e "      ${C_B}sudo -u librenms lnms device:add <ip> --v2c --community=public${C_N}"
   echo
-
-  # Endurece permisos del log (puede contener trazas con datos sensibles)
-  chmod 600 "$LOG_FILE" 2>/dev/null || true
+  echo -e "${C_G}═════════════════════════════════════════════════════════════════${C_N}"
+  echo
 }
 
 # ============================================================================
