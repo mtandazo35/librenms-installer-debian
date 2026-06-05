@@ -1,0 +1,15 @@
+# Logs y credenciales que el instalador genera en runtime (no deben ir a git)
+*.log
+*credenciales*
+*.bak
+*.bak.*
+
+# Editores
+.vscode/
+.idea/
+*.swp
+*~
+
+# SO
+.DS_Store
+Thumbs.db
