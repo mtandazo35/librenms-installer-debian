@@ -56,11 +56,27 @@ Este instalador resuelve por defecto **todos** los errores típicos que aparecen
 
 ---
 
-## Quick start
+## ⚡ Quick install (one-liner)
+
+**Instalación rápida con un solo comando** — descarga y ejecuta el instalador en el VPS:
 
 ```bash
-# 1. Clonar este repo en tu VPS
-git clone https://github.com/<tu-user>/librenms-installer-debian.git
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/mtandazo35/librenms-installer-debian/main/install.sh)"
+```
+
+LibreNMS quedará escuchando en **puerto 80** (HTTP plano). Si tu VPS está detrás de NAT/MikroTik con port-forward externo (ej. `:8087` → `:80`), pasa `BASE_URL` con el puerto público:
+
+```bash
+sudo BASE_URL=http://200.1.2.3:8087 bash -c "$(curl -fsSL https://raw.githubusercontent.com/mtandazo35/librenms-installer-debian/main/install.sh)"
+```
+
+### Alternativa: clonar y ejecutar
+
+Si prefieres revisar el script antes de correrlo (recomendado):
+
+```bash
+# 1. Clonar el repo en tu VPS
+git clone https://github.com/mtandazo35/librenms-installer-debian.git
 cd librenms-installer-debian
 
 # 2. Correr el instalador (modo interactivo: te pregunta el BASE_URL)
