@@ -12,7 +12,9 @@
 #    1. Cron daemon NO viene en Debian 13 cloud images → instala y verifica
 #    2. NODE_ID obligatorio en .env para que el python poller wrapper registre
 #    3. rrdcached recomendado (single-node también) → instala y configura
-#    4. distributed_poller=false en single-node (evita FAIL espurio si no hay rrdcached)
+#    4. distributed_poller=true con rrdcached (el /validate WEB corre todos los
+#       grupos y sin él marca FAIL; NO activa modo distribuido sin memcached);
+#       false si no hay rrdcached
 #    5. server_name=_ (catch-all) → funciona con NAT, IP pública, FQDN o IP interna
 #    6. /etc/cron.d/librenms debe ser root:root 0644 o cron lo ignora
 #    7. PHP-FPM pool: listen.owner/group explícitos (Debian 13)
@@ -46,7 +48,7 @@ set -Eeuo pipefail
 # ============================================================================
 #  Configuración
 # ============================================================================
-INSTALLER_VERSION="1.3"
+INSTALLER_VERSION="1.4"
 
 # Globals seteados por detect_host_ip (declarados aquí para set -u safety)
 PRIMARY_IP=""
@@ -667,7 +669,14 @@ single_node_tuning() {
   # Si NO → apagar distributed_poller (evita FAIL espurio del check rrdcached).
   if [[ -S /run/rrdcached.sock ]]; then
     run_as_librenms "lnms config:set rrdcached unix:/run/rrdcached.sock" 2>&1 | tail -2 || warn "lnms config:set rrdcached falló"
-    ok "rrdcached integrado con LibreNMS"
+    # distributed_poller=true: el /validate WEB corre TODOS los grupos de
+    # validación (ignora isDefault, a diferencia del CLI) y sin esto muestra
+    # FAIL "You have not enabled distributed_poller" en single-node.
+    # Es seguro: wrapper.py solo activa modo distribuido real si ADEMÁS están
+    # seteados distributed_poller_memcached_host/port (aquí no lo están),
+    # y CheckMemcached solo corre con cache driver memcached.
+    run_as_librenms "lnms config:set distributed_poller true" 2>&1 | tail -2 || warn "lnms config:set distributed_poller falló"
+    ok "rrdcached integrado + distributed_poller=true (validate web verde)"
   else
     run_as_librenms "lnms config:set distributed_poller false" 2>&1 | tail -2 || warn "lnms config:set distributed_poller falló"
     ok "distributed_poller=false (single-node sin rrdcached)"
@@ -808,8 +817,8 @@ save_credentials() {
   # Forzar poll manual
   sudo -u librenms ${LIBRENMS_DIR}/poller.php -h <hostname>
 
-  # Ver dispositivos monitoreados
-  sudo -u librenms lnms device:list
+  # Ping/estado de un device (device:list fue removido upstream en 26.7)
+  sudo -u librenms lnms device:ping <hostname>
 
   # Actualizar LibreNMS (ejecutar como librenms, no root)
   sudo -u librenms ${LIBRENMS_DIR}/daily.sh

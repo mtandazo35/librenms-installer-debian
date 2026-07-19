@@ -45,6 +45,7 @@ Este instalador resuelve por defecto **todos** los errores típicos que aparecen
 | Acceso vía NAT con puerto distinto a :80 (ej `:8087`) | `server_name _` (catch-all) + `APP_URL` con puerto correcto |
 | Web UI redirige todo a `/install` (HTTP 302 en bucle) | Remueve `INSTALL=true` de `.env` al final — LibreNMS lo agrega solo (`EnvHelper.php`) cuando no existe `config.php`, asumiendo instalación por wizard web |
 | `lnms user:list` removido upstream (26.7+) rompía el check de admin | Existencia del usuario verificada con query directa a la tabla `users` |
+| `/validate` **web** muestra `FAIL: You have not enabled distributed_poller` en single-node (el CLI sale verde) | La página web corre TODOS los grupos de validación ignorando `isDefault`. Fix: `distributed_poller=true` cuando hay rrdcached — es seguro: `wrapper.py` solo activa modo distribuido real si además existen `distributed_poller_memcached_host/port` |
 
 ---
 
@@ -149,8 +150,8 @@ sudo -u librenms lnms device:add 127.0.0.1 --v2c --community=librenms_local
 # Un MikroTik / switch / router
 sudo -u librenms lnms device:add 10.0.0.1 --v2c --community=public
 
-# Listar devices
-sudo -u librenms lnms device:list
+# Ping/estado de un device (device:list fue removido upstream en 26.7)
+sudo -u librenms lnms device:ping 127.0.0.1
 ```
 
 ### Vía web UI
