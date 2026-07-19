@@ -26,7 +26,7 @@
 #    sudo BASE_URL=http://mi.dominio ADMIN_EMAIL=tu@correo bash install.sh
 #
 #  Variables (export antes de correr, todas opcionales):
-#    BASE_URL          URL pública por la que se accederá (si vacía, se pregunta)
+#    BASE_URL          URL pública por la que se accederá (si vacía, se auto-detecta la IP)
 #    ADMIN_EMAIL       Email del usuario admin inicial
 #    ADMIN_PASS        Si vacía se genera aleatoria
 #    TIMEZONE          Default: America/Guayaquil
@@ -38,12 +38,12 @@
 #
 # ============================================================================
 
-set -euo pipefail
+set -Eeuo pipefail
 
 # ============================================================================
 #  Configuración
 # ============================================================================
-INSTALLER_VERSION="1.0"
+INSTALLER_VERSION="1.1"
 
 # Globals seteados por detect_host_ip (declarados aquí para set -u safety)
 PRIMARY_IP=""
@@ -66,6 +66,10 @@ C_R='\033[0;31m'; C_G='\033[0;32m'; C_Y='\033[1;33m'; C_B='\033[1;34m'
 C_M='\033[1;35m'; C_N='\033[0m'
 
 mkdir -p "$(dirname "$LOG_FILE")"
+# El log contiene credenciales (DB/admin) → modo 600 desde el primer byte,
+# no recién al final como hacía v1.0
+touch "$LOG_FILE"
+chmod 600 "$LOG_FILE"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 log()  { echo -e "\n${C_B}[$(date '+%H:%M:%S')]${C_N} ${C_B}$*${C_N}"; }
@@ -74,7 +78,9 @@ warn() { echo -e "  ${C_Y}[WARN]${C_N} $*"; }
 err()  { echo -e "  ${C_R}[ERROR]${C_N} $*" >&2; }
 fail() { err "$*"; exit 1; }
 
-trap 'rc=$?; if [[ $rc -ne 0 ]]; then err "Instalador falló en línea $LINENO (comando: ${BASH_COMMAND}). Log: $LOG_FILE"; fi' EXIT
+# ERR (+ set -E) en vez de EXIT: $LINENO dentro de un trap EXIT apunta a la
+# línea del propio trap, no a la del comando que falló
+trap 'err "Instalador falló en línea $LINENO (comando: ${BASH_COMMAND}). Log: $LOG_FILE"' ERR
 
 backup_file() {
   local f="$1"
@@ -159,7 +165,13 @@ prompt_user_input() {
     BASE_URL="http://${PRIMARY_IP}"
   fi
 
-  ADMIN_EMAIL="${ADMIN_EMAIL:-admin@$(hostname -d 2>/dev/null || hostname || echo localdomain)}"
+  # hostname -d devuelve VACÍO con exit 0 en hosts sin FQDN (cloud images) →
+  # el fallback con || nunca se disparaba y el email quedaba "admin@" (inválido,
+  # lnms user:add lo rechaza y el instalador moría en la etapa 18)
+  local _dom
+  _dom=$(hostname -d 2>/dev/null || true)
+  [[ -n "$_dom" ]] || _dom=$(hostname 2>/dev/null || echo localdomain)
+  ADMIN_EMAIL="${ADMIN_EMAIL:-admin@${_dom}}"
   ADMIN_PASS="${ADMIN_PASS:-$(random_pass | cut -c1-20)}"
 
   # Pre-install summary — muestra qué va a hacer antes de tocar nada
@@ -384,7 +396,9 @@ EOF
   # NODE_ID — OBLIGATORIO para que poller-wrapper.py registre el nodo.
   # Sin NODE_ID el wrapper falla con: ".env does not contain a valid NODE_ID setting"
   local current_nid
-  current_nid=$(grep '^NODE_ID=' "$LIBRENMS_DIR/.env" | cut -d= -f2-)
+  # || true: con pipefail, si un .env pre-existente no tiene la línea NODE_ID=
+  # el grep sale 1 y mataría el script
+  current_nid=$(grep '^NODE_ID=' "$LIBRENMS_DIR/.env" 2>/dev/null | cut -d= -f2- || true)
   if [[ -z "$current_nid" || ${#current_nid} -lt 8 ]]; then
     local nid; nid=$(random_hex 12)
     set_env_var NODE_ID "$nid"
