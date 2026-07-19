@@ -53,7 +53,7 @@ set -Eeuo pipefail
 # ============================================================================
 #  Configuración
 # ============================================================================
-INSTALLER_VERSION="1.6"
+INSTALLER_VERSION="1.7"
 
 # Globals seteados por detect_host_ip (declarados aquí para set -u safety)
 PRIMARY_IP=""
@@ -446,19 +446,27 @@ db_migrate() {
 configure_web() {
   log "=== 11. nginx + php-fpm pool ==="
 
-  # Pool php-fpm dedicado para LibreNMS
+  # Pool php-fpm dedicado para LibreNMS.
+  # Generado con contenido propio (NO copiando www.conf): www.conf puede no
+  # existir (re-runs donde ya fue deshabilitado, PHP-FPM personalizado) y el
+  # cp mataba el instalador. Valores pm.* = defaults de Debian.
   local pool="${PHP_CONF_DIR}/fpm/pool.d/librenms.conf"
   if [[ ! -f "$pool" ]]; then
-    cp "${PHP_CONF_DIR}/fpm/pool.d/www.conf" "$pool"
-    sed -i 's/^\[www\]/[librenms]/' "$pool"
-    sed -i 's|^user = www-data|user = librenms|' "$pool"
-    sed -i 's|^group = www-data|group = librenms|' "$pool"
-    sed -i "s|^listen = .*|listen = /run/php-fpm-librenms.sock|" "$pool"
-    sed -i 's|^;listen.owner.*|listen.owner = www-data|' "$pool"
-    sed -i 's|^;listen.group.*|listen.group = www-data|' "$pool"
-    # Garantía: en Debian 13 esas líneas pueden no estar comentadas → forzar al final
-    grep -q '^listen.owner = www-data' "$pool" || echo 'listen.owner = www-data' >> "$pool"
-    grep -q '^listen.group = www-data' "$pool" || echo 'listen.group = www-data' >> "$pool"
+    cat > "$pool" <<'POOL'
+; Pool dedicado LibreNMS — generado por install.sh
+[librenms]
+user = librenms
+group = librenms
+listen = /run/php-fpm-librenms.sock
+; nginx corre como www-data → debe poder escribir al socket
+listen.owner = www-data
+listen.group = www-data
+pm = dynamic
+pm.max_children = 5
+pm.start_servers = 2
+pm.min_spare_servers = 1
+pm.max_spare_servers = 3
+POOL
     ok "php-fpm pool 'librenms' creado"
   else
     ok "php-fpm pool ya existe"

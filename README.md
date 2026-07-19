@@ -40,7 +40,7 @@ Este instalador resuelve por defecto **todos** los errores típicos que aparecen
 | `dubious ownership in repository` | `git config --system --add safe.directory /opt/librenms` |
 | `cron` package missing en Debian 13 cloud | Install explícito + `systemctl is-active cron` check |
 | `/etc/cron.d/librenms` ignorado por cron | Force `chown root:root && chmod 644` post-cp |
-| PHP-FPM 502 (`listen.owner` missing en Debian 13) | Append explícito si los `sed` upstream no aplican |
+| PHP-FPM 502 (`listen.owner` missing en Debian 13) | Pool `librenms` generado con contenido propio y `listen.owner/group` explícitos — sin copiar `www.conf` (puede no existir y rompía el instalador) |
 | Pool `www` default desperdiciando workers | `mv www.conf www.conf.disabled` |
 | Acceso vía NAT con puerto distinto a :80 (ej `:8087`) | `server_name _` (catch-all) + `APP_URL` con puerto correcto |
 | Web UI redirige todo a `/install` (HTTP 302 en bucle) | Remueve `INSTALL=true` de `.env` al final — LibreNMS lo agrega solo (`EnvHelper.php`) cuando no existe `config.php`, asumiendo instalación por wizard web |
