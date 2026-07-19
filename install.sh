@@ -25,6 +25,9 @@
 #   11. Remueve INSTALL=true de .env (EnvHelper lo agrega si no hay config.php
 #       y el web UI redirige TODO a /install aunque el CLI ya instaló todo)
 #   12. Check de admin vía DB (lnms user:list fue removido upstream en 26.7)
+#   13. RUN_BY_DEFAULT=true en Mail.php y RrdCheck.php (+skip-worktree): el
+#       /validate web no auto-corre grupos manuales y quedan con botón "Run"
+#       en vez del Ok verde
 #
 #  Uso:
 #    sudo bash install.sh
@@ -48,7 +51,7 @@ set -Eeuo pipefail
 # ============================================================================
 #  Configuración
 # ============================================================================
-INSTALLER_VERSION="1.4"
+INSTALLER_VERSION="1.5"
 
 # Globals seteados por detect_host_ip (declarados aquí para set -u safety)
 PRIMARY_IP=""
@@ -629,7 +632,20 @@ configure_cron_scheduler() {
 #  Etapa 17 — Parche RrdCheck.php (bug upstream)
 # ============================================================================
 patch_rrdcheck() {
-  log "=== 16. Parche RrdCheck.php (bug upstream LibreNMS) ==="
+  log "=== 16. Parches validaciones web (RrdCheck.php + Mail.php) ==="
+
+  # Mail: upstream lo marca RUN_BY_DEFAULT=false (ejecución manual) → el
+  # /validate web lo deja con botón "Run" en vez de correrlo y parece "sin
+  # validar". Correrlo siempre es inocuo: sin mail transport configurado
+  # devuelve Ok sin ejecutar ningún check.
+  local mail="$LIBRENMS_DIR/LibreNMS/Validations/Mail.php"
+  if [[ -f "$mail" ]] && grep -q 'RUN_BY_DEFAULT = false' "$mail"; then
+    sed -i 's/\$RUN_BY_DEFAULT = false/\$RUN_BY_DEFAULT = true/' "$mail"
+    sudo -u "$LIBRENMS_USER" git -C "$LIBRENMS_DIR" update-index --skip-worktree LibreNMS/Validations/Mail.php 2>/dev/null || true
+    ok "Mail.php: RUN_BY_DEFAULT=true (+skip-worktree) — grupo auto-run en /validate web"
+  else
+    ok "Mail.php ya parchado o sin flag que cambiar"
+  fi
 
   if [[ "$SKIP_RRDCHECK_PATCH" == "yes" || "$SKIP_RRDCHECK_PATCH" == "true" ]]; then
     warn "Parche SALTADO (SKIP_RRDCHECK_PATCH=$SKIP_RRDCHECK_PATCH)"
@@ -651,12 +667,20 @@ patch_rrdcheck() {
     ok "RrdCheck.php no requiere parche (upstream lo arregló?)"
   fi
 
+  # Igual que Mail: RUN_BY_DEFAULT=true para que el /validate web lo corra
+  # automáticamente (upstream lo deja manual porque recorre todos los RRDs;
+  # en instalaciones single-node es barato)
+  sed -i 's/\$RUN_BY_DEFAULT = false/\$RUN_BY_DEFAULT = true/' "$target"
+
   # Marca el archivo como skip-worktree para que git lo trate como limpio.
   # Sin esto: daily.sh hace rollback Y validate.php muestra WARN "modified files".
   sudo -u "$LIBRENMS_USER" git -C "$LIBRENMS_DIR" update-index --skip-worktree LibreNMS/Validations/RrdCheck.php 2>/dev/null || true
   if sudo -u "$LIBRENMS_USER" git -C "$LIBRENMS_DIR" ls-files -v LibreNMS/Validations/RrdCheck.php | grep -q '^S '; then
     ok "Git skip-worktree activo sobre RrdCheck.php"
   fi
+
+  # Refresca opcache para que php-fpm sirva las clases parchadas
+  systemctl reload "$PHP_FPM_SVC" 2>/dev/null || true
 }
 
 # ============================================================================
