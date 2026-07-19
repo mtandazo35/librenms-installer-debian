@@ -6,7 +6,7 @@
 #
 #  Versión:    1.0 (junio 2026)
 #  Licencia:   MIT
-#  Probado en: Debian 12 (bookworm) · Debian 13 (trixie) · LibreNMS 26.5.x
+#  Probado en: Debian 12 (bookworm) · Debian 13 (trixie) · LibreNMS 26.5.x–26.7.x
 #
 #  Este instalador integra los workarounds descubiertos en deployments reales:
 #    1. Cron daemon NO viene en Debian 13 cloud images → instala y verifica
@@ -20,6 +20,9 @@
 #    9. Bootstrap manual del scheduler_working cache key (evita FAIL transitorio)
 #   10. Parche local de RrdCheck.php (bug upstream: echo contamina JSON HTTP)
 #       + git update-index --skip-worktree para no romper daily.sh
+#   11. Remueve INSTALL=true de .env (EnvHelper lo agrega si no hay config.php
+#       y el web UI redirige TODO a /install aunque el CLI ya instaló todo)
+#   12. Check de admin vía DB (lnms user:list fue removido upstream en 26.7)
 #
 #  Uso:
 #    sudo bash install.sh
@@ -43,7 +46,7 @@ set -Eeuo pipefail
 # ============================================================================
 #  Configuración
 # ============================================================================
-INSTALLER_VERSION="1.1"
+INSTALLER_VERSION="1.2"
 
 # Globals seteados por detect_host_ip (declarados aquí para set -u safety)
 PRIMARY_IP=""
@@ -683,7 +686,13 @@ single_node_tuning() {
 # ============================================================================
 create_admin() {
   log "=== 18. Usuario admin ==="
-  if run_as_librenms "lnms user:list" 2>/dev/null | grep -qE '\badmin\b'; then
+  # Check vía DB: 'lnms user:list' fue removido upstream (no existe en 26.7+)
+  # y además un grep sobre su salida daba falso positivo con emails que
+  # contuvieran "admin"
+  local admin_count
+  admin_count=$(MYSQL_PWD="$DB_PASS" mysql -ulibrenms -N -e \
+    "SELECT COUNT(*) FROM librenms.users WHERE username='admin'" 2>/dev/null || echo 0)
+  if [[ "$admin_count" -ge 1 ]]; then
     ADMIN_CREATED=0
     ok "Usuario 'admin' ya existe (no se modifica)"
   else
@@ -709,6 +718,17 @@ bootstrap_runtime() {
   # en poller_cluster (sino validate.php dice "No python wrapper pollers found")
   run_as_librenms "python3 poller-wrapper.py 1" 2>&1 | tail -3 || warn "Primer poll falló (no crítico, se reintenta vía cron)"
   ok "Nodo registrado en poller_cluster"
+
+  # CRÍTICO: LibreNMS agrega INSTALL=true a .env cuando no existe config.php
+  # (LibreNMS/Util/EnvHelper.php, asume que se usará el wizard web /install).
+  # Este instalador hace todo por CLI → si el flag queda, el middleware
+  # CheckInstalled redirige TODO el web UI a /install en bucle.
+  if grep -q '^INSTALL=' "$LIBRENMS_DIR/.env"; then
+    sed -i '/^INSTALL=/d' "$LIBRENMS_DIR/.env"
+    run_as_librenms "php artisan config:clear" 2>&1 | tail -1 || true
+    systemctl reload "$PHP_FPM_SVC" 2>/dev/null || true
+    ok "Flag INSTALL=true removido de .env (wizard web no necesario, todo fue por CLI)"
+  fi
 }
 
 # ============================================================================
@@ -804,6 +824,8 @@ final_validate() {
   code=$(curl -sk -o /dev/null -w "%{http_code}" http://127.0.0.1/login || echo "000")
   if [[ "$code" == "200" ]]; then
     ok "Stack web responde HTTP 200 en /login"
+  elif [[ "$code" == "302" ]]; then
+    warn "/login devolvió HTTP 302 — probable redirect a /install (revisa que .env no tenga INSTALL=true)"
   else
     warn "/login devolvió HTTP $code — revisa nginx/php-fpm"
   fi

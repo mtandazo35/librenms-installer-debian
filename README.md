@@ -43,6 +43,8 @@ Este instalador resuelve por defecto **todos** los errores típicos que aparecen
 | PHP-FPM 502 (`listen.owner` missing en Debian 13) | Append explícito si los `sed` upstream no aplican |
 | Pool `www` default desperdiciando workers | `mv www.conf www.conf.disabled` |
 | Acceso vía NAT con puerto distinto a :80 (ej `:8087`) | `server_name _` (catch-all) + `APP_URL` con puerto correcto |
+| Web UI redirige todo a `/install` (HTTP 302 en bucle) | Remueve `INSTALL=true` de `.env` al final — LibreNMS lo agrega solo (`EnvHelper.php`) cuando no existe `config.php`, asumiendo instalación por wizard web |
+| `lnms user:list` removido upstream (26.7+) rompía el check de admin | Existencia del usuario verificada con query directa a la tabla `users` |
 
 ---
 
