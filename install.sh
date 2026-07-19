@@ -46,7 +46,7 @@ set -Eeuo pipefail
 # ============================================================================
 #  Configuración
 # ============================================================================
-INSTALLER_VERSION="1.2"
+INSTALLER_VERSION="1.3"
 
 # Globals seteados por detect_host_ip (declarados aquí para set -u safety)
 PRIMARY_IP=""
@@ -739,6 +739,18 @@ save_credentials() {
   local hostname_full
   hostname_full=$(hostname -f 2>/dev/null || hostname)
 
+  # En re-runs el admin ya existe y ADMIN_PASS es un random nuevo que NO es el
+  # password real → preservar el password del cred file anterior en vez de
+  # sobrescribirlo con "(no modificado)" y perderlo
+  local admin_pass_display
+  if [[ "${ADMIN_CREATED:-0}" -eq 1 ]]; then
+    admin_pass_display="$ADMIN_PASS"
+  elif [[ -f "$CRED_FILE" ]] && grep -qE '^  Password admin:\s*\S' "$CRED_FILE"; then
+    admin_pass_display=$(grep '^  Password admin:' "$CRED_FILE" | head -1 | sed 's/^  Password admin:[[:space:]]*//')
+  else
+    admin_pass_display="(no modificado — admin ya existía)"
+  fi
+
   cat > "$CRED_FILE" <<EOF
 =================================================================
   LibreNMS — Credenciales y datos de instalación
@@ -756,7 +768,7 @@ save_credentials() {
   --- Acceso web (nginx escucha en puerto 80) ---
   URL:                ${BASE_URL}
   Usuario admin:      admin
-  Password admin:     $([[ "${ADMIN_CREATED:-0}" -eq 1 ]] && echo "${ADMIN_PASS}" || echo "(no modificado — admin ya existía)")
+  Password admin:     ${admin_pass_display}
   Email admin:        ${ADMIN_EMAIL}
 
   --- Base de datos ---
