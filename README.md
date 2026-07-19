@@ -47,6 +47,7 @@ Este instalador resuelve por defecto **todos** los errores típicos que aparecen
 | `lnms user:list` removido upstream (26.7+) rompía el check de admin | Existencia del usuario verificada con query directa a la tabla `users` |
 | `/validate` **web** muestra `FAIL: You have not enabled distributed_poller` en single-node (el CLI sale verde) | La página web corre TODOS los grupos de validación ignorando `isDefault`. Fix: `distributed_poller=true` cuando hay rrdcached — es seguro: `wrapper.py` solo activa modo distribuido real si además existen `distributed_poller_memcached_host/port` |
 | Grupos **Mail** y **RRD Check** quedan con botón "Run" (sin el Ok verde) en `/validate` web | Upstream los marca `RUN_BY_DEFAULT = false` (ejecución manual). Parche: `RUN_BY_DEFAULT = true` en `Mail.php` y `RrdCheck.php` + `skip-worktree` — inocuo en single-node (Mail sin transport devuelve Ok sin checks; RrdCheck es barato con pocos devices) |
+| `WARN: You have no devices` tras instalar | Agrega automáticamente el propio server como primer device (`127.0.0.1` vía el snmpd local que el mismo instalador configura) + discovery y poll inmediatos |
 
 ---
 

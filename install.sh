@@ -28,6 +28,8 @@
 #   13. RUN_BY_DEFAULT=true en Mail.php y RrdCheck.php (+skip-worktree): el
 #       /validate web no auto-corre grupos manuales y quedan con botón "Run"
 #       en vez del Ok verde
+#   14. Agrega localhost como primer device (snmpd local) → sin el WARN
+#       "You have no devices" el validate queda 100% verde a la primera
 #
 #  Uso:
 #    sudo bash install.sh
@@ -51,7 +53,7 @@ set -Eeuo pipefail
 # ============================================================================
 #  Configuración
 # ============================================================================
-INSTALLER_VERSION="1.5"
+INSTALLER_VERSION="1.6"
 
 # Globals seteados por detect_host_ip (declarados aquí para set -u safety)
 PRIMARY_IP=""
@@ -765,6 +767,33 @@ bootstrap_runtime() {
 }
 
 # ============================================================================
+#  Etapa 20b — Device inicial (el propio host vía snmpd local)
+# ============================================================================
+add_first_device() {
+  log "=== 19b. Device inicial (localhost) ==="
+
+  # Sin devices el validate queda con WARN "You have no devices". El snmpd
+  # local ya fue configurado por este instalador → el propio server como
+  # primer device deja el validate 100% verde y monitorea el host.
+  local count
+  count=$(MYSQL_PWD="$DB_PASS" mysql -ulibrenms -N -e \
+    "SELECT COUNT(*) FROM librenms.devices" 2>/dev/null || echo 0)
+  if [[ "$count" -ge 1 ]]; then
+    ok "Ya hay $count device(s) registrado(s) — no se agrega localhost"
+    return 0
+  fi
+
+  if run_as_librenms "lnms device:add 127.0.0.1 --v2c --community='${SNMP_COMMUNITY}'" 2>&1 | tail -2; then
+    # Discovery + poll inmediatos para que los checks de poller/RRD tengan datos
+    run_as_librenms "php discovery.php -h 127.0.0.1" >/dev/null 2>&1 || true
+    run_as_librenms "php poller.php -h 127.0.0.1"    >/dev/null 2>&1 || true
+    ok "Device localhost agregado (snmpd local, community: $SNMP_COMMUNITY)"
+  else
+    warn "No pude agregar localhost como device — agrégalo manual: lnms device:add 127.0.0.1 --v2c --community=$SNMP_COMMUNITY"
+  fi
+}
+
+# ============================================================================
 #  Etapa 21 — Guardar credenciales
 # ============================================================================
 save_credentials() {
@@ -930,7 +959,8 @@ print_banner() {
   printf "    %-22s %s\n" "Log instalación:" "$LOG_FILE"
   printf "    %-22s %s\n" "Código LibreNMS:" "$LIBRENMS_DIR"
   echo
-  echo -e "  ${C_Y}>>> Próximo paso — agregar tu primer device:${C_N}"
+  echo -e "  ${C_Y}>>> El propio server ya quedó monitoreado (localhost vía snmpd).${C_N}"
+  echo -e "  ${C_Y}>>> Para agregar más devices:${C_N}"
   echo -e "      ${C_B}sudo -u librenms lnms device:add <ip> --v2c --community=public${C_N}"
   echo
   echo -e "${C_G}═════════════════════════════════════════════════════════════════${C_N}"
@@ -968,6 +998,7 @@ main() {
   single_node_tuning
   create_admin
   bootstrap_runtime
+  add_first_device
   save_credentials
   final_validate
   print_banner
