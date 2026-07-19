@@ -1,0 +1,4 @@
+# Los scripts bash deben mantener LF siempre — un checkout con CRLF en Windows
+# rompe la ejecución al copiarlos a un server Linux ($'\r': command not found)
+* text=auto
+*.sh text eol=lf
